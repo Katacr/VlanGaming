@@ -3,5 +3,6 @@ members = [
     "protocol",
     "server",
     "client-core",
+    "client-tauri/src-tauri",
 ]
 resolver = "2"
