@@ -21,3 +21,4 @@ client-core = { path = "../../client-core" }
 protocol = { path = "../../protocol" }
 tokio = { version = "1", features = ["full"] }
 wintun = "0.5"
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
