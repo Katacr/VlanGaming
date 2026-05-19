@@ -1,0 +1,9 @@
+[package]
+name = "client-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+protocol = { path = "../protocol" }
+tokio = { version = "1", features = ["full"] }
+wintun = "0.5"
