@@ -3,7 +3,9 @@ use protocol::{PlayerInfo, RoomInfo};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{Emitter, Manager, State, WindowEvent};
 use tokio::sync::{mpsc, Mutex};
 
 /// 应用状态
@@ -281,6 +283,39 @@ async fn send_ping(state: State<'_, SharedState>) -> Result<SimpleResult, String
     }
 }
 
+/// 测试服务器延迟（不需要登录）
+#[tauri::command]
+async fn ping_server_latency(ip: String, port: String) -> Result<u32, String> {
+    let addr = format!("{}:{}", ip, port);
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| e.to_string())?;
+    socket.connect(&addr).await.map_err(|e| e.to_string())?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let msg = protocol::encode(&protocol::ClientMessage::Ping { timestamp: now })
+        .map_err(|e| e.to_string())?;
+    socket.send(&msg).await.map_err(|e| e.to_string())?;
+
+    let mut buf = [0u8; 1024];
+    let timeout = tokio::time::timeout(std::time::Duration::from_secs(3), socket.recv(&mut buf)).await;
+
+    match timeout {
+        Ok(Ok(_)) => {
+            let elapsed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            Ok((elapsed.saturating_sub(now)) as u32)
+        }
+        _ => Err("超时".to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state: SharedState = Arc::new(Mutex::new(AppState {
@@ -302,7 +337,54 @@ pub fn run() {
             disband_room,
             send_chat,
             send_ping,
+            ping_server_latency,
         ])
+        .setup(|app| {
+            // 创建托盘右键菜单
+            let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            // 创建系统托盘图标
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("VLan Gaming")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // 拦截窗口关闭事件，改为隐藏
+            let window = app.get_webview_window("main").unwrap();
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window_clone.hide();
+                }
+            });
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

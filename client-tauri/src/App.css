@@ -11,13 +11,21 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
 }
 
 .app {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -25,12 +33,17 @@
 .container {
   margin: 0 auto;
   padding: 1.5rem;
-  max-width: 100%;
-  height: 100vh;
+  width: 360px;
+  height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
   overflow-y: auto;
+}
+
+.container:has(.room-list) {
+  justify-content: flex-start;
+  padding-top: 2rem;
 }
 
 .title {
@@ -64,6 +77,34 @@
   font-size: 0.85rem;
   font-weight: 500;
   color: #333;
+}
+
+.server-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.server-tab {
+  flex: 1;
+  padding: 0.5rem 0.8rem;
+  border: 2px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #555;
+  transition: all 0.2s;
+}
+
+.server-tab:hover {
+  border-color: #396cd8;
+}
+
+.server-tab.active {
+  border-color: #396cd8;
+  background: #eef3ff;
+  color: #396cd8;
+  font-weight: 600;
 }
 
 .input-with-history {
