@@ -11,6 +11,7 @@ function App() {
   const [nickname, setNickname] = useState("");
   const [currentRoom, setCurrentRoom] = useState("");
   const [virtualIp, setVirtualIp] = useState("");
+  const [maxPlayers, setMaxPlayers] = useState(20);
 
   return (
     <div className="app">
@@ -25,9 +26,10 @@ function App() {
       {page === "rooms" && (
         <RoomListPage
           nickname={nickname}
-          onJoinRoom={(roomId, vip) => {
+          onJoinRoom={(roomId, vip, mp) => {
             setCurrentRoom(roomId);
             setVirtualIp(vip);
+            setMaxPlayers(mp);
             setPage("room");
           }}
           onBack={() => setPage("home")}
@@ -38,6 +40,7 @@ function App() {
           nickname={nickname}
           roomId={currentRoom}
           virtualIp={virtualIp}
+          maxPlayers={maxPlayers}
           onLeave={() => setPage("rooms")}
         />
       )}

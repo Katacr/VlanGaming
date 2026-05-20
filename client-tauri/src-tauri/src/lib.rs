@@ -16,6 +16,7 @@ struct AppState {
     connected: bool,
     nickname: String,
     tun_shutdown: Option<watch::Sender<bool>>,
+    tun_device: Option<TunDevice>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -72,6 +73,19 @@ async fn connect_server(
     state: State<'_, SharedState>,
     app: tauri::AppHandle,
 ) -> Result<SimpleResult, String> {
+    // 清理旧连接
+    {
+        let mut app_state = state.lock().await;
+        if app_state.client.is_some() {
+            app_state.client = None;
+            app_state.connected = false;
+            if let Some(tx) = app_state.tun_shutdown.take() {
+                let _ = tx.send(true);
+            }
+            drop(app_state.tun_device.take());
+        }
+    }
+
     let addr_str = format!("{}:{}", params.server_ip, params.port);
     let server_addr = addr_str.parse().map_err(|e| format!("无效的服务器地址: {}", e))?;
 
@@ -90,12 +104,13 @@ async fn connect_server(
         let _ = client_clone.run_receive_loop(event_tx).await;
     });
 
-    // 等待连接确认
+    // 等待连接确认，缓存期间收到的其他事件
+    let mut buffered_events: Vec<ClientEvent> = Vec::new();
     let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while let Some(event) = event_rx.recv().await {
             match event {
                 ClientEvent::ConnectOk => return Some(true),
-                _ => continue,
+                other => buffered_events.push(other),
             }
         }
         None
@@ -107,10 +122,26 @@ async fn connect_server(
             let app_clone = app.clone();
             let state_clone = state.inner().clone();
             let client_for_tun = client.clone();
+
+            // 创建新 channel，将缓存事件和后续事件合并
+            let (merged_tx, mut merged_rx) = mpsc::unbounded_channel::<ClientEvent>();
+            for event in buffered_events {
+                let _ = merged_tx.send(event);
+            }
+            // 将原始 event_rx 转发到 merged channel
+            let merged_tx_clone = merged_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = event_rx.recv().await {
+                    if merged_tx_clone.send(event).is_err() {
+                        break;
+                    }
+                }
+            });
+
             tokio::spawn(async move {
                 let mut tun_session: Option<Arc<wintun::Session>> = None;
 
-                while let Some(event) = event_rx.recv().await {
+                while let Some(event) = merged_rx.recv().await {
                     match event {
                         ClientEvent::RoomList { rooms } => {
                             let _ = app_clone.emit("room-list", RoomListResult {
@@ -163,9 +194,11 @@ async fn connect_server(
                                 let session = session.clone();
                                 let payload = payload.clone();
                                 tokio::task::spawn_blocking(move || {
-                                    if let Ok(mut packet) = session.allocate_send_packet(payload.len() as u16) {
-                                        packet.bytes_mut().copy_from_slice(&payload);
-                                        session.send_packet(packet);
+                                    if let Ok(len) = u16::try_from(payload.len()) {
+                                        if let Ok(mut packet) = session.allocate_send_packet(len) {
+                                            packet.bytes_mut().copy_from_slice(&payload);
+                                            session.send_packet(packet);
+                                        }
                                     }
                                 });
                             }
@@ -197,6 +230,12 @@ async fn connect_server(
                                 .as_millis() as u64;
                             let ping_ms = now.saturating_sub(timestamp);
                             let _ = app_clone.emit("ping-update", ping_ms);
+                            // 上报 ping 值给服务端，供其他玩家查看
+                            let client = client_for_tun.clone();
+                            let ms = ping_ms as u32;
+                            tokio::spawn(async move {
+                                let _ = client.report_ping(ms).await;
+                            });
                         }
                         _ => {}
                     }
@@ -231,10 +270,10 @@ async fn list_rooms(state: State<'_, SharedState>) -> Result<SimpleResult, Strin
 
 /// 创建房间
 #[tauri::command]
-async fn create_room(room_id: String, state: State<'_, SharedState>) -> Result<SimpleResult, String> {
+async fn create_room(room_id: String, max_players: u32, state: State<'_, SharedState>) -> Result<SimpleResult, String> {
     let app_state = state.lock().await;
     if let Some(client) = &app_state.client {
-        client.create_room(&room_id).await.map_err(|e| e.to_string())?;
+        client.create_room(&room_id, max_players).await.map_err(|e| e.to_string())?;
         Ok(SimpleResult { success: true, error: None })
     } else {
         Ok(SimpleResult { success: false, error: Some("未连接".to_string()) })
@@ -392,12 +431,10 @@ async fn start_tun(virtual_ip: u32, client: &Arc<Client>, state: &SharedState) -
         }
     });
 
-    // 保存 shutdown sender
+    // 保存 shutdown sender 和 TunDevice
     let mut app_state = state.lock().await;
     app_state.tun_shutdown = Some(shutdown_tx);
-
-    // 保持 TunDevice 存活（移入后台任务）
-    std::mem::forget(tun);
+    app_state.tun_device = Some(tun);
 
     println!("[TUN] 虚拟网卡已启动: {}", ip);
     Some(session)
@@ -408,8 +445,10 @@ async fn stop_tun(state: &SharedState) {
     let mut app_state = state.lock().await;
     if let Some(tx) = app_state.tun_shutdown.take() {
         let _ = tx.send(true);
-        println!("[TUN] 虚拟网卡已关闭");
     }
+    // drop TunDevice 会销毁 session 和 adapter，移除虚拟网卡
+    drop(app_state.tun_device.take());
+    println!("[TUN] 虚拟网卡已关闭");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -419,6 +458,7 @@ pub fn run() {
         connected: false,
         nickname: String::new(),
         tun_shutdown: None,
+        tun_device: None,
     }));
 
     tauri::Builder::default()

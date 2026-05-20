@@ -19,6 +19,7 @@ interface Props {
   nickname: string;
   roomId: string;
   virtualIp: string;
+  maxPlayers: number;
   onLeave: () => void;
 }
 
@@ -32,11 +33,10 @@ function formatIp(ip: number): string {
   return `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
 }
 
-export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props) {
+export default function RoomPage({ nickname, roomId, virtualIp, maxPlayers, onLeave }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [inputMsg, setInputMsg] = useState("");
-  const [myPing, setMyPing] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const onLeaveRef = useRef(onLeave);
@@ -44,7 +44,7 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
 
   useEffect(() => {
     const unlistenChat = listen<ChatMessage>("chat-message", (event) => {
-      setMessages((prev) => [...prev, event.payload]);
+      setMessages((prev) => [...prev, event.payload].slice(-200));
     });
 
     const unlistenPlayers = listen<{ players: PlayerInfo[] }>("player-list", (event) => {
@@ -78,10 +78,6 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
       ]);
     });
 
-    const unlistenPing = listen<number>("ping-update", (event) => {
-      setMyPing(event.payload);
-    });
-
     const unlistenKicked = listen<string>("kicked", (event) => {
       alert(`你被踢出房间: ${event.payload}`);
       onLeaveRef.current();
@@ -105,7 +101,6 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
       unlistenPlayers.then((f) => f());
       unlistenPeerJoined.then((f) => f());
       unlistenPeerLeft.then((f) => f());
-      unlistenPing.then((f) => f());
       unlistenKicked.then((f) => f());
       unlistenDisbanded.then((f) => f());
       clearInterval(pingInterval);
@@ -127,6 +122,8 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
   }
 
   async function handleLeave() {
+    const confirmed = window.confirm("确定要退出房间吗？若你是游戏房主可能导致其他玩家全部断开。");
+    if (!confirmed) return;
     try {
       await invoke("leave_room");
       onLeave();
@@ -167,10 +164,6 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
       <div className="room-header">
         <button className="back-btn" onClick={handleLeave}>← 离开房间</button>
         <h2>房间: {roomId}</h2>
-        <span className="my-info">
-          {nickname} | {virtualIp} | Ping: {myPing}ms
-          {isAdmin && <span className="admin-badge">房主</span>}
-        </span>
         {isAdmin && (
           <button className="disband-btn" onClick={handleDisband}>解散房间</button>
         )}
@@ -183,10 +176,10 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
             {messages.map((msg, i) => (
               <div
                 key={i}
-                className={`chat-msg ${msg.sender === "系统" ? "system" : msg.sender === nickname ? "self" : ""}`}
+                className={`chat-msg ${msg.sender === "系统" ? "system" : msg.sender === nickname ? "self" : "other"}`}
               >
-                <span className="msg-sender">{msg.sender}</span>
-                <span className="msg-content">{msg.content}</span>
+                <span className="msg-sender-name">{msg.sender}</span>
+                <div className="msg-bubble">{msg.content}</div>
               </div>
             ))}
             <div ref={chatEndRef} />
@@ -205,7 +198,7 @@ export default function RoomPage({ nickname, roomId, virtualIp, onLeave }: Props
 
         {/* 右侧玩家列表 */}
         <div className="player-panel">
-          <h3>玩家列表 ({players.length})</h3>
+          <h3>玩家列表 ( {players.length} / {maxPlayers} )</h3>
           <div className="player-list">
             {players.map((player) => (
               <div key={player.virtual_ip} className="player-item">
